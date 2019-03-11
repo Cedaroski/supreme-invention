@@ -1,26 +1,22 @@
+import math
 import sys
 import time
-import math
-import numpy as np
+
 import matplotlib.pyplot as plt
+import numpy as np
+from extremitypathfinder.extremitypathfinder import \
+    PolygonEnvironment as Environment
 from matplotlib.patches import Polygon
-from extremitypathfinder.extremitypathfinder import PolygonEnvironment as Environment
+
 sys.path.append(".")
 from SupportAlgorithm.DynamicWindow import DynamicWindow
 
-WIDTH = 160
-HEIGHT = 100
-MINBIAS = 0.03
-
-MAXVELOCITY =1000
-ACC = 1
-
-BORDER_POS = [(1.525, 1.9), (6.475, 3.1), 
+BORDER_POS = [(1.525, 1.9), (6.475, 3.1),
               (1.7, 3.875), (4, 2.5), (6.3, 1.125)]
-BORDER_BOX = [(0.125, 0.5), (0.125, 0.5), 
+BORDER_BOX = [(0.125, 0.5), (0.125, 0.5),
               (0.5, 0.125), (0.5, 0.125), (0.5, 0.125)]  # Half of the weight and height
 
-ROBOT_SIZE = 0.4
+ROBOT_SIZE = 0.01
 
 POLYGON_SETTINGS = {
     'edgecolor': 'black',
@@ -37,57 +33,6 @@ show_animation = True
 
 max_accel = 1.0  # max accel [m/ss]
 max_jerk = 0.5  # max jerk [m/sss]
-
-class quinic_polynomial:
-
-    def __init__(self, xs, vxs, axs, xe, vxe, axe, T):
-
-        # calc coefficient of quinic polynomial
-        self.xs = xs
-        self.vxs = vxs
-        self.axs = axs
-        self.xe = xe
-        self.vxe = vxe
-        self.axe = axe
-
-        self.a0 = xs
-        self.a1 = vxs
-        self.a2 = axs / 2.0
-
-        A = np.array([[T**3, T**4, T**5],
-                      [3 * T ** 2, 4 * T ** 3, 5 * T ** 4],
-                      [6 * T, 12 * T ** 2, 20 * T ** 3]])
-        b = np.array([xe - self.a0 - self.a1 * T - self.a2 * T**2,
-                      vxe - self.a1 - 2 * self.a2 * T,
-                      axe - 2 * self.a2])
-        x = np.linalg.solve(A, b)
-
-        self.a3 = x[0]
-        self.a4 = x[1]
-        self.a5 = x[2]
-
-    def calc_point(self, t):
-        xt = self.a0 + self.a1 * t + self.a2 * t**2 + \
-            self.a3 * t**3 + self.a4 * t**4 + self.a5 * t**5
-
-        return xt
-
-    def calc_first_derivative(self, t):
-        xt = self.a1 + 2 * self.a2 * t + \
-            3 * self.a3 * t**2 + 4 * self.a4 * t**3 + 5 * self.a5 * t**4
-
-        return xt
-
-    def calc_second_derivative(self, t):
-        xt = 2 * self.a2 + 6 * self.a3 * t + 12 * self.a4 * t**2 + 20 * self.a5 * t**3
-
-        return xt
-
-    def calc_third_derivative(self, t):
-        xt = 6 * self.a3 + 24 * self.a4 * t + 60 * self.a5 * t**2
-
-        return xt
-
 
 def mark_points(vertex_iter, **kwargs):
     xs = []
@@ -142,8 +87,10 @@ def draw_internal_graph(map, ax):
 
 
 def set_limits(map, ax):
-    ax.set_xlim((min(map.boundary_polygon.coordinates[:, 0]) - 1, max(map.boundary_polygon.coordinates[:, 0]) + 1))
-    ax.set_ylim((min(map.boundary_polygon.coordinates[:, 1]) - 1, max(map.boundary_polygon.coordinates[:, 1]) + 1))
+    ax.set_xlim((min(map.boundary_polygon.coordinates[:, 0]) - 1, max(
+        map.boundary_polygon.coordinates[:, 0]) + 1))
+    ax.set_ylim((min(map.boundary_polygon.coordinates[:, 1]) - 1, max(
+        map.boundary_polygon.coordinates[:, 1]) + 1))
 
 
 def draw_path(vertex_path):
@@ -166,17 +113,22 @@ def draw_prepared_map(map):
     if SHOW_PLOTS:
         plt.show()
 
-class NewMove():
+
+class GlobalLocalPlanner():
     def __init__(self):
         self.environment = Environment()
 
         # counter clockwise vertex numbering!
         boundary_coordinates = [
-            (0+ROBOT_SIZE, 0+ROBOT_SIZE), 
-            (3.25-ROBOT_SIZE, 0+ROBOT_SIZE), (3.25-ROBOT_SIZE, 1.0+ROBOT_SIZE), (3.5+ROBOT_SIZE, 1.0+ROBOT_SIZE), (3.5+ROBOT_SIZE, 0+ROBOT_SIZE), 
+            (0+ROBOT_SIZE, 0+ROBOT_SIZE),
+            (3.25-ROBOT_SIZE, 0+ROBOT_SIZE), (3.25-ROBOT_SIZE, 1.0+ROBOT_SIZE),
+            (3.5 + ROBOT_SIZE, 1.0+ROBOT_SIZE), (3.5+ROBOT_SIZE, 0+ROBOT_SIZE),
             (8.0-ROBOT_SIZE, 0+ROBOT_SIZE),
-            (8.0-ROBOT_SIZE, 5.0-ROBOT_SIZE), 
-            (8.0-3.25+ROBOT_SIZE, 5.0-ROBOT_SIZE), (8.0-3.25+ROBOT_SIZE, 4.0-ROBOT_SIZE), (8.0-3.5-ROBOT_SIZE, 4.0-ROBOT_SIZE), (8.0-3.5-ROBOT_SIZE, 5.0-ROBOT_SIZE), 
+            (8.0-ROBOT_SIZE, 5.0-ROBOT_SIZE),
+            (8.0-3.25+ROBOT_SIZE, 5.0-ROBOT_SIZE),
+            (8.0 - 3.25+ROBOT_SIZE, 4.0-ROBOT_SIZE),
+            (8.0 - 3.5-ROBOT_SIZE, 4.0-ROBOT_SIZE),
+            (8.0 - 3.5-ROBOT_SIZE, 5.0-ROBOT_SIZE),
             (0+ROBOT_SIZE, 5.0-ROBOT_SIZE)
         ]
 
@@ -189,10 +141,10 @@ class NewMove():
                 ((x-w-ROBOT_SIZE), (y+h+ROBOT_SIZE)),
                 ((x+w+ROBOT_SIZE), (y+h+ROBOT_SIZE)),
                 ((x+w+ROBOT_SIZE), (y-h-ROBOT_SIZE)),
-                ])
+            ])
 
-
-        self.environment.store(boundary_coordinates, list_of_holes, validate=False)
+        self.environment.store(boundary_coordinates,
+                               list_of_holes, validate=False)
         self.environment.prepare()
         self.done = True
         self.dynamic = DynamicWindow()
@@ -204,30 +156,41 @@ class NewMove():
         path, length = self.environment.find_shortest_path(start, goal)
         return path
 
-    def setGoal(self, start, goal):
-        print(start, goal)
+    def setGoal(self, start, goal, angle=0):
+        #print(start, goal)
         self.path = self.findPath(start, goal)
-        #if len(self.path) == 0:
-            #self.done = True
-            #return
         self.index = 1
-        self.next_target = self.path[1]
-        self.done = False
+        self.angle_path = []
+        if len(self.path) > 1:
+            self.next_target = self.path[1]
+            #print("new target: {}".format(self.next_target))
+            for i, j in zip(self.path[:-1], self.path[1:]):
+                self.angle_path.append(math.atan2(j[1]-i[1], j[0]-i[0]))
+            self.angle_path.append(angle)
+            self.next_angle = self.angle_path[0]
+            self.done = False
+        else:
+            self.done = True
 
-    def moveTo(self, pos, vel, angle, action):
+    def moveTo(self, pos, vel, angle, angular, action):
         if self.done:
             return action
         if self.distance(pos, self.next_target) < 0.5:
             self.index += 1
             if self.index < len(self.path):
                 self.next_target = self.path[self.index]
+                self.next_angle = self.angle_path[self.index-1]
+                #print("new target: {}".format(self.next_target))
             else:
                 self.done = True
                 action[0], action[1], action[2] = 0, 0, 0
                 return action
-        tic = time.time()
-        action = self.dynamic.moveTo(action, pos, vel, angle, self.next_target)
-        print(time.time() - tic)
+        #tic = time.time()
+        tmp_angle = math.atan2(self.next_target[1]-pos[1], self.next_target[0]-pos[0])
+        tmp_length = (self.next_target[0]**2 + self.next_target[1]**2)
+        tmp_target = np.array([math.cos(tmp_angle), math.sin(tmp_angle)])*min(5, tmp_length)
+        action = self.dynamic.moveTo(action, pos, vel, angle, angular, tmp_target, self.next_angle)
+        #print(time.time() - tic)
         '''
         u = np.array([
             self.next_target[0]-pos[0],
@@ -251,7 +214,7 @@ class NewMove():
 
 
 if __name__ == "__main__":
-    move = NewMove()
+    move = GlobalLocalPlanner()
     move.plot()
-    start, goal= (0.5, 0.5), (4.5, 0.5)
+    start, goal = (0.5, 0.5), (1.5, 4.5)
     print(move.findPath(start, goal))

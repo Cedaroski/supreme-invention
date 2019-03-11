@@ -1,22 +1,22 @@
 '''
 https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html
 '''
-import random
 import math
-import Box2D
-import cv2
-import numpy as np
-import matplotlib.pyplot as plt
+import random
 from collections import namedtuple
 from itertools import count
 
+import Box2D
+import matplotlib.pyplot as plt
+import numpy as np
 import torch
 import torch.nn as nn
-import torch.optim as optim
 import torch.nn.functional as F
+import torch.optim as optim
 
-from SupportAlgorithm.NewMove import NewMove
+import cv2
 from Agent.DQN import DQN
+from SupportAlgorithm.GlobalLocalPlanner import GlobalLocalPlanner
 from util.Grid import Map
 
 BATCH_SIZE = 128
@@ -66,12 +66,12 @@ class DQNAgent():
 
         self.steps_done = 0
         self.target = (-10, -10)
-        self.move = NewMove()
-        icra_map = Map(80, 50)
+        self.move = GlobalLocalPlanner()
+        icra_map = Map(40, 25)
         grid = icra_map.getGrid()
-        grid = cv2.resize(grid, (17, 17), interpolation=cv2.INTER_AREA)
+        #grid = cv2.resize(grid, (17, 17), interpolation=cv2.INTER_AREA)
         grid = 1 - grid
-        self.grid = torch.from_numpy(grid)
+        self.grid = torch.from_numpy(grid).to(device)
 
     def select_action(self, state, is_test=False):
         device = self.device
@@ -84,6 +84,7 @@ class DQNAgent():
         pos = (state[0], state[1])
         vel = (state[2], state[3])
         angle = state[4]
+        angular = state[5]
         state = torch.tensor(state).to(device).unsqueeze(0).double()
         self.state = state
         sample = random.random()
@@ -93,22 +94,35 @@ class DQNAgent():
             with torch.no_grad():
                 value_map = self.policy_net(state)[0][0]
                 value_map *= self.grid
-                #plt.imshow(value_map.numpy())
-                #plt.show()
+                # plt.imshow(value_map.numpy())
+                # plt.show()
                 col_max, col_max_indice = value_map.max(dim=0)
                 max_col_max, max_col_max_indice = col_max.max(dim=0)
                 x = max_col_max_indice.item()
                 y = col_max_indice[x].item()
-                x = x/17.0*8.0
-                y = y/17.0*5.0
+                x = x/40.0*8.0
+                y = y/25.0*5.0
         else:
-            x, y = random.random()*8.0, random.random()*5.0
+            value_map = torch.randn(25, 40).double().to(device)
+            value_map *= self.grid
+            # plt.imshow(value_map.numpy())
+            # plt.show()
+            col_max, col_max_indice = value_map.max(0)
+            max_col_max, max_col_max_indice = col_max.max(0)
+            x = max_col_max_indice.item()
+            y = col_max_indice[x].item()
+            x = x/40.0*8.0
+            y = y/25.0*5.0
+            #x, y = random.random()*8.0, random.random()*5.0
 
         self.target = (x, y)
-        self.move.setGoal(pos, self.target)
+        try:
+            self.move.setGoal(pos, self.target)
+        except:
+            return action
         self.steps_done += 1
 
-        action = self.move.moveTo(pos, vel, angle, action)
+        action = self.move.moveTo(pos, vel, angle, angular, action)
         return action
 
     def push(self, next_state, reward):

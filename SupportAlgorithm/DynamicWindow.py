@@ -2,14 +2,15 @@
 Mobile robot motion planning sample with Dynamic Window Approach
 author: Atsushi Sakai (@Atsushi_twi)
 """
-import time
 import math
-import numpy as np
-import matplotlib.pyplot as plt
-
 import sys
+import time
+
+import matplotlib.pyplot as plt
+import numpy as np
+
 sys.path.append(".")
-from Referee.ICRAMap import BORDER_POS, BORDER_BOX
+from Referee.ICRAMap import BORDER_BOX, BORDER_POS
 
 show_animation = True
 
@@ -20,25 +21,26 @@ class Config():
     def __init__(self):
         # robot parameter
         self.max_speed = 1.0  # [m/s]
-        self.min_speed = -1.0  # [m/s]
-        self.max_yawrate = 1 * math.pi / 180.0  # [rad/s]  #40
-        self.max_accel = 2.0  # [m/ss]
+        self.min_speed = 0.1  # [m/s]
+        self.max_yawrate = 180 * math.pi / 180.0  # [rad/s]  #40
+        self.max_accel = 5.0  # [m/ss]
         self.max_dyawrate = 400 * math.pi / 180.0  # [rad/ss]
-        self.v_reso = 0.05  # [m/s]
+        self.v_reso = 0.1  # [m/s]
         self.yawrate_reso = 1 * math.pi / 180.0  # [rad/s]
-        self.dt = 0.1  # [s]
+        self.dt = 1/30.0  # [s]
         self.predict_time = 2.0  # [s]
-        self.to_goal_cost_gain = 1.0
-        self.speed_cost_gain = 1.0
-        self.robot_radius = 0.25  # [m]
+        self.to_goal_cost_gain = 1000.0
+        self.speed_cost_gain = 100.0
+        self.robot_radius = 0.4  # [m]
 
 
 def motion(x, u, dt):
     # motion model
 
-    x[2] += u[1] * dt # u:velocity.u1: angle=>chuizhi velocity  u0: linar, x:position x0:x,x1:y,x2:angle
-    x[0] += u[0] * math.cos(x[2]) * dt - u[2] * math.sin(x[2]) * dt
-    x[1] += u[0] * math.sin(x[2]) * dt + u[2] * math.cos(x[2]) * dt
+    # u:velocity.u1: angle=>chuizhi velocity  u0: linar, x:position x0:x,x1:y,x2:angle
+    x[2] += u[1] * dt
+    x[0] += u[0] * math.cos(x[2]) * dt + u[2] * math.sin(x[2]) * dt
+    x[1] += u[0] * math.sin(x[2]) * dt - u[2] * math.cos(x[2]) * dt
     x[3] = u[0]
     x[4] = u[1]
     x[5] = u[2]
@@ -65,7 +67,7 @@ def calc_dynamic_window(x, config):
     return dw
 
 
-def calc_trajectory(xinit, v, y ,vv, config):
+def calc_trajectory(xinit, v, y, vv, config):
 
     x = np.array(xinit)
     traj = np.array(x)
@@ -78,17 +80,59 @@ def calc_trajectory(xinit, v, y ,vv, config):
     return traj
 
 
-def calc_final_input(x, u, dw, config, goal, ob):
+def calc_final_input(x, u, dw, config, goal, ob, goal_angle):
 
     xinit = x[:]
-    min_cost = 10000.0
+    min_cost = 1e11
     min_u = u
     min_u[0] = 0.0
     best_traj = np.array([x])
 
+    #delta = np.array([goal[0]-x[0], goal[1]-x[1]])
+    #target_angle = math.atan2(delta[1], delta[0])
+    omega = min([(goal_angle - x[2]) * 3, config.max_yawrate])
+    #omega = 0
+
     # evalucate all trajectory with sampled input in dynamic window
+    for theta in np.arange(0, math.pi/4, 0.1):
+        #omega = min([(goal_angle - theta)*5, config.max_yawrate])
+        for v in np.arange(dw[0], dw[1], config.v_reso):
+            v_t = v * math.cos(theta)
+            v_n = -v * math.sin(theta)
+            traj = calc_trajectory(xinit, v_t, omega, v_n, config)
+            to_goal_cost = calc_to_goal_cost(traj, goal, config)
+            speed_cost = config.speed_cost_gain * (config.max_speed - traj[-1, 3])
+            ob_cost = calc_obstacle_cost(traj, ob, config)
+
+            final_cost = to_goal_cost + speed_cost + ob_cost
+
+            if min_cost >= final_cost:
+                min_cost = final_cost
+                min_u = [v_t, omega, v_n]
+                best_traj = traj
+
+        theta = -theta
+        #omega = omega_base - theta*0.1
+        #omega = min([(goal_angle - theta)*5, config.max_yawrate])
+        for v in np.arange(dw[0], dw[1], config.v_reso):
+            v_t = v * math.cos(theta)
+            v_n = -v * math.sin(theta)
+            traj = calc_trajectory(xinit, v_t, omega, v_n, config)
+            to_goal_cost = calc_to_goal_cost(traj, goal, config)
+            speed_cost = config.speed_cost_gain * (config.max_speed - traj[-1, 3])
+            speed_cost += config.speed_cost_gain/2 * (config.max_speed - traj[-1, 5])
+            ob_cost = calc_obstacle_cost(traj, ob, config)
+
+            final_cost = to_goal_cost + speed_cost + ob_cost
+
+            if min_cost >= final_cost:
+                min_cost = final_cost
+                min_u = [v_t, omega, v_n]
+                best_traj = traj
+            
+    '''
     for v in np.arange(dw[0], dw[1], config.v_reso):
-        for y in np.arange(dw[2], dw[3], config.yawrate_reso):
+        for y in [(target_angle-x[2])*10]:
             for vv in np.arange(-dw[1], dw[1], config.v_reso):
                 traj = calc_trajectory(xinit, v, y, vv, config)
                 # calc cost
@@ -107,6 +151,7 @@ def calc_final_input(x, u, dw, config, goal, ob):
                     min_cost = final_cost
                     min_u = [v, y, vv]
                     best_traj = traj
+    '''
 
     return min_u, best_traj
 
@@ -152,25 +197,30 @@ def calc_obstacle_cost(traj, ob, config):
 
 def calc_to_goal_cost(traj, goal, config):
     # calc to goal cost. It is 2D norm.
-
+    '''
     goal_magnitude = math.sqrt(goal[0]**2 + goal[1]**2)
     traj_magnitude = math.sqrt(traj[-1, 0]**2 + traj[-1, 1]**2)
     dot_product = (goal[0] * traj[-1, 0]) + (goal[1] * traj[-1, 1])
     error = dot_product / (goal_magnitude * traj_magnitude)
     error_angle = math.acos(error)
     cost = config.to_goal_cost_gain * error_angle
-    cost += config.to_goal_cost_gain * math.sqrt(
-        (goal[0]-traj[-1, 0])**2 + (goal[1]-traj[-1, 1])**2)
+    angle_goal = math.atan2(goal[1] - traj[0,1], goal[0] - traj[0,0])
+    angle_now = math.atan2(traj[-1,1] - traj[0,1], traj[-1,0] - traj[0,0])
+    error_angle = (angle_now - angle_goal)**2
+    cost = config.to_goal_cost_gain * error_angle
+    '''
+    cost = config.to_goal_cost_gain * (1 + math.sqrt(
+        (goal[0]-traj[-1, 0])**2 + (goal[1]-traj[-1, 1])**2))
 
     return cost
 
 
-def dwa_control(x, u, config, goal, ob):
+def dwa_control(x, u, config, goal, ob, goal_angle):
     # Dynamic Window control
 
     dw = calc_dynamic_window(x, config)
 
-    u, traj = calc_final_input(x, u, dw, config, goal, ob)
+    u, traj = calc_final_input(x, u, dw, config, goal, ob, goal_angle)
 
     return u, traj
 
@@ -179,6 +229,7 @@ def plot_arrow(x, y, yaw, length=0.5, width=0.1):  # pragma: no cover
     plt.arrow(x, y, length * math.cos(yaw), length * math.sin(yaw),
               head_length=width, head_width=width)
     plt.plot(x, y)
+
 
 def calc_repulsive_potential(x, y, ox, oy, rr):
     # search nearest obstacle
@@ -194,6 +245,7 @@ def calc_repulsive_potential(x, y, ox, oy, rr):
     # calc repulsive potential
     #dq = np.hypot(x - ox[minid], y - oy[minid])
     return np.array([ox[minid], oy[minid]])
+
 
 class DynamicWindow():
     def __init__(self):
@@ -218,21 +270,29 @@ class DynamicWindow():
         self.ob = np.load("ob.npy")
         self.config = Config()
 
-    def moveTo(self, action, pos, vel, angle, goal):
-        vel = math.sqrt(vel[0]**2+vel[1]**2)
-        x = np.array([pos[0], pos[1], angle, vel, 0.0])
-        u = np.array([vel, 0.0])
-        u, ltraj = dwa_control(x, u, self.config, goal, self.ob)
-        print(pos, goal, u)
+    def moveTo(self, action, pos, vel, angle, angular, goal, goal_angle=0):
+        # vel = math.sqrt(vel[0]**2+vel[1]**2)
+        x = np.array([pos[0], pos[1], angle, 0.0, 0.0, 0.0])
+        u = np.array([vel[0]*math.cos(angle) + vel[1]*math.sin(angle), angular,
+                      vel[0]*math.sin(angle) - vel[1]*math.cos(angle)])
+        x[-3:] = u[-3:]
+        u, ltraj = dwa_control(x, u, self.config, goal, self.ob, goal_angle)
+        #print("Real angle: {}, angular :{}".format(angle, angular))
+        #x = motion(x, u, self.config.dt)
+        #print("Simulated angle: {}, angular: {}".format(x[2], x[4]))
+        #print(pos, goal, u)
+        #print(x, u)
+
         action[0] = u[0]
         action[1] = u[1]
+        action[2] = u[2]
         return action
 
 
 def main(gx, gy, ob):
     print(__file__ + " start!!")
-    # initial state [x(m), y(m), yaw(rad), v(m/s), omega(rad/s)]
-    x = np.array([0.5, 0.5, math.pi / 8.0, 0.0, 0.0, 0.0])
+    # initial state [x(m), y(m), yaw(rad), v(m/s), omega(rad/s), v_n(m/s)]
+    x = np.array([0.5, 0.5, math.pi / 2.0, 0.0, 0.0, 0.0])
     # goal position [x(m), y(m)]
     goal = np.array([gx, gy])
     # obstacles [x(m) y(m), ....]
@@ -263,10 +323,11 @@ def main(gx, gy, ob):
 
     for i in range(1000):
         tic = time.time()
-        u, ltraj = dwa_control(x, u, config, goal, ob)
-        print(time.time()-tic)
+        u, ltraj = dwa_control(x, u, config, goal, ob, math.pi/4)
+        # print(time.time()-tic)
 
         x = motion(x, u, config.dt)
+        print(x, u)
         traj = np.vstack((traj, x))  # store state history
 
         # print(traj)
@@ -277,7 +338,7 @@ def main(gx, gy, ob):
             plt.plot(ltraj[:, 0], ltraj[:, 1], "-g")
             plt.plot(x[0], x[1], "xr")
             plt.plot(goal[0], goal[1], "xb")
-            #plt.imshow(ob[:,:])
+            # plt.imshow(ob[:,:])
             plt.plot(ox, oy, "ok")
             plot_arrow(x[0], x[1], x[2])
             plt.axis("equal")
@@ -301,4 +362,4 @@ def main(gx, gy, ob):
 if __name__ == '__main__':
     dy = DynamicWindow()
     ob = dy.ob
-    main(6.5, 4.5, ob)
+    main(1.5, 0.5, ob)
