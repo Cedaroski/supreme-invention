@@ -1,20 +1,23 @@
 '''
 https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html
 '''
-import random
 import math
-import Box2D
-import numpy as np
+import random
 from collections import namedtuple
 from itertools import count
 
+import Box2D
+import matplotlib.pyplot as plt
+import numpy as np
 import torch
 import torch.nn as nn
-import torch.optim as optim
 import torch.nn.functional as F
+import torch.optim as optim
 
-from SupportAlgorithm.MoveAction import MoveAction
+import cv2
 from Agent.DQN import DQN
+from SupportAlgorithm.GlobalLocalPlanner import GlobalLocalPlanner
+from util.Grid import Map
 
 BATCH_SIZE = 128
 GAMMA = 0.999
@@ -55,6 +58,8 @@ class DQNAgent():
 
         self.policy_net = DQN().to(device).double()
         self.target_net = DQN().to(device).double()
+        # print('xxxxxxxxxxxxxxx')
+        # print(self.policy_net.state_dict())
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.target_net.eval()
 
@@ -62,8 +67,15 @@ class DQNAgent():
         self.memory = ReplayMemory(10000)
 
         self.steps_done = 0
+        self.target = (-10, -10)
+        self.move = GlobalLocalPlanner()
+        icra_map = Map(40, 25)
+        grid = icra_map.getGrid()
+        #grid = cv2.resize(grid, (17, 17), interpolation=cv2.INTER_AREA)
+        grid = 1 - grid
+        self.grid = torch.from_numpy(grid).to(device)
 
-    def select_action(self, state):
+    def select_action(self, state, is_test=False):
         device = self.device
         action = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         if state[-1] > 0 and state[-3] > 0:
@@ -73,25 +85,46 @@ class DQNAgent():
 
         pos = (state[0], state[1])
         vel = (state[2], state[3])
+        angle = state[4]
+        angular = state[5]
         state = torch.tensor(state).to(device).unsqueeze(0).double()
         self.state = state
         sample = random.random()
         eps_threshold = EPS_END + (EPS_START - EPS_END) * \
             math.exp(-1. * self.steps_done / EPS_DECAY)
-        self.steps_done += 1
-        if sample > eps_threshold:
+        if is_test or sample > eps_threshold:
             with torch.no_grad():
                 value_map = self.policy_net(state)[0][0]
+                value_map *= self.grid
+                # plt.imshow(value_map.numpy())
+                # plt.show()
                 col_max, col_max_indice = value_map.max(dim=0)
                 max_col_max, max_col_max_indice = col_max.max(dim=0)
-                y = max_col_max_indice.item()
-                x = col_max_indice[y].item()
-                self.target = (x/9.0*8.0), (y/9.0*5.0)
+                x = max_col_max_indice.item()
+                y = col_max_indice[x].item()
+                x = x/40.0*8.0
+                y = y/25.0*5.0
         else:
-            self.target = (random.random()*8.0, random.random()*5.0)
+            value_map = torch.randn(25, 40).double().to(device)
+            value_map *= self.grid
+            # plt.imshow(value_map.numpy())
+            # plt.show()
+            col_max, col_max_indice = value_map.max(0)
+            max_col_max, max_col_max_indice = col_max.max(0)
+            x = max_col_max_indice.item()
+            y = col_max_indice[x].item()
+            x = x/40.0*8.0
+            y = y/25.0*5.0
+            #x, y = random.random()*8.0, random.random()*5.0
 
-        move = MoveAction(self.target, pos, vel)
-        action = move.MoveTo(pos, vel, action)
+        self.target = (x, y)
+        try:
+            self.move.setGoal(pos, self.target)
+        except:
+            return action
+        self.steps_done += 1
+
+        action = self.move.moveTo(pos, vel, angle, angular, action)
         return action
 
     def push(self, next_state, reward):
@@ -149,6 +182,7 @@ class DQNAgent():
         self.optimizer.zero_grad()
         loss.backward()
         for param in self.policy_net.parameters():
+            if(param.grad is None): continue
             param.grad.data.clamp_(-1, 1)
         self.optimizer.step()
 
